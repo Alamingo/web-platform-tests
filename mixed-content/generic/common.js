@@ -50,9 +50,9 @@ function xhrRequest(url, responseType) {
 
     xhr.addEventListener("load", function() {
       if (xhr.status != 200)
-        return reject(Error(xhr.statusText));
-
-      resolve(xhr.response);
+        reject(Error(xhr.statusText));
+      else
+        resolve(xhr.response);
     });
 
     xhr.send();
@@ -83,7 +83,8 @@ function setAttributes(el, attrs) {
 function bindEvents(element, resolveEventName, rejectEventName) {
   element.eventPromise = new Promise(function(resolve, reject) {
     element.addEventListener(resolveEventName  || "load", resolve);
-    element.addEventListener(rejectEventName || "error", reject);
+    element.addEventListener(rejectEventName || "error",
+                             function(e) { e.preventDefault(); reject(); } );
   });
 }
 
@@ -98,7 +99,7 @@ function bindEvents(element, resolveEventName, rejectEventName) {
  *     {@code eventPromise} property. Default value evaluates to false.
  * @return {DOMElement} The newly created DOM element.
  */
-function createElement(tagName, attrs, parent, doBindEvents) {
+function createElement(tagName, attrs, parentNode, doBindEvents) {
   var element = document.createElement(tagName);
 
   if (doBindEvents)
@@ -106,16 +107,27 @@ function createElement(tagName, attrs, parent, doBindEvents) {
 
   // We set the attributes after binding to events to catch any
   // event-triggering attribute changes. E.g. form submission.
-  setAttributes(element, attrs);
+  //
+  // But be careful with images: unlike other elements they will start the load
+  // as soon as the attr is set, even if not in the document yet, and sometimes
+  // complete it synchronously, so the append doesn't have the effect we want.
+  // So for images, we want to set the attrs after appending, whereas for other
+  // elements we want to do it before appending.
+  var isImg = (tagName == "img");
+  if (!isImg)
+    setAttributes(element, attrs);
 
-  if (parent)
-    parent.appendChild(element);
+  if (parentNode)
+    parentNode.appendChild(element);
+
+  if (isImg)
+    setAttributes(element, attrs);
 
   return element;
 }
 
-function createRequestViaElement(tagName, attrs, parent) {
-  return createElement(tagName, attrs, parent, true).eventPromise;
+function createRequestViaElement(tagName, attrs, parentNode) {
+  return createElement(tagName, attrs, parentNode, true).eventPromise;
 }
 
 /**
@@ -177,7 +189,12 @@ function requestViaFetch(url) {
  * @return {Promise} The promise for success/error events.
  */
 function requestViaWorker(url) {
-  var worker = new Worker(url);
+  var worker;
+  try {
+    worker = new Worker(url);
+  } catch (e) {
+    return Promise.reject(e);
+  }
   bindEvents(worker, "message", "error");
   worker.postMessage('');
 
@@ -292,16 +309,20 @@ function requestViaLinkPrefetch(url) {
  */
 function createMediaElement(type, media_attrs, source_attrs) {
   var mediaElement = createElement(type, {});
-  var sourceElement = createElement("source", {}, mediaElement);
+
+  var sourceElement = createElement("source", {});
 
   mediaElement.eventPromise = new Promise(function(resolve, reject) {
     mediaElement.addEventListener("loadeddata", resolve);
+
     // Notice that the source element will raise the error.
     sourceElement.addEventListener("error", reject);
   });
 
   setAttributes(mediaElement, media_attrs);
   setAttributes(sourceElement, source_attrs);
+
+  mediaElement.appendChild(sourceElement);
   document.body.appendChild(mediaElement);
 
   return mediaElement;
@@ -316,7 +337,7 @@ function createMediaElement(type, media_attrs, source_attrs) {
 function requestViaVideo(url) {
   return createMediaElement("video",
                             {},
-                            {type: "video/mp4", src: url}).eventPromise;
+                            {type: "video/ogg", src: url}).eventPromise;
 }
 
 /**
@@ -328,7 +349,7 @@ function requestViaVideo(url) {
 function requestViaAudio(url) {
   return createMediaElement("audio",
                             {},
-                            {type: "audio/mpeg", src: url}).eventPromise;
+                            {type: "audio/wav", src: url}).eventPromise;
 }
 
 /**
